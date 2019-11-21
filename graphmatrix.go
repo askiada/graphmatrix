@@ -8,6 +8,9 @@ import (
 	"sort"
 )
 
+//Define en empty sentinel in the indexes into indices slice
+var EmptySentinel = ^uint64(0)
+
 // GraphMatrix holds a row index and vector of column pointers.
 // If a point is defined at a particular row i and column j, an
 // edge exists between vertex i and vertex j.
@@ -41,7 +44,7 @@ func (it *NZIter) Next() (r, c uint32, done bool) {
 	// increment to the next set index
 	it.indIndex++
 	// did we move to a new row?
-	if it.indIndex >= it.g.IndPtr[r+1] {
+	if it.indIndex >= it.g.IndPtr[r+1] && it.g.IndPtr[r+1] != EmptySentinel {
 		it.indPtrIndex++
 	}
 	done = it.indPtrIndex >= uint32(len(it.g.IndPtr)-1)
@@ -51,10 +54,12 @@ func (it *NZIter) Next() (r, c uint32, done bool) {
 
 func (g GraphMatrix) NewNZIter() *NZIter {
 	firstRow := uint32(0)
-	for g.IndPtr[firstRow] == 0 {
+	for g.IndPtr[firstRow] == EmptySentinel {
 		firstRow++
 	}
-	firstRow--
+	if firstRow != 0 {
+		firstRow--
+	}
 	return &NZIter{g, false, firstRow, 0}
 }
 
@@ -65,6 +70,10 @@ func New(m int) (GraphMatrix, error) {
 	}
 	i := make([]uint32, 0)
 	ip := make([]uint64, m+1)
+
+	for i := 0; i < m+1; i++ {
+		ip[i] = EmptySentinel
+	}
 	return GraphMatrix{IndPtr: ip, Indices: i}, nil
 }
 
@@ -107,12 +116,19 @@ func NewFromSortedIJ(s, d []uint32) (GraphMatrix, error) {
 	}
 	m++
 
-	IndPtr := make([]uint64, s[0]+1, m)
-	currval := s[0]
+	//Allocate the slice with a capacity and a length of m elements
+	IndPtr := make([]uint64, m)
+	currval := uint32(0)
+	//Init all the values with a default value
+	for i := 0; uint32(i) < m; i++ {
+		IndPtr[i] = EmptySentinel
+	}
+	first := true
 	for i, n := range s {
-		if n > currval { // the row has changed
-			IndPtr = append(IndPtr, uint64(i))
+		if first || n > currval { // the row has changed
+			IndPtr[n] = uint64(i)
 			currval = n
+			first = false
 		}
 	}
 	IndPtr = append(IndPtr, uint64(len(d)))
@@ -201,9 +217,16 @@ func (g GraphMatrix) GetIndex(r, c uint32) bool {
 	if uint32(len(g.IndPtr)) <= c+1 {
 		return false
 	}
-
+	next := r + 1
 	r1 := g.IndPtr[r]
-	r2 := g.IndPtr[r+1]
+	r2 := g.IndPtr[next]
+	for {
+		if r2 != EmptySentinel {
+			break
+		}
+		next++
+		r2 = g.IndPtr[next]
+	}
 	if r1 >= r2 {
 		return false
 	}
@@ -214,7 +237,23 @@ func (g GraphMatrix) GetIndex(r, c uint32) bool {
 // GetRow returns the 'n'th row slice, or an empty slice if empty.
 func (g GraphMatrix) GetRow(n uint32) []uint32 {
 	p1 := g.IndPtr[n]
-	p2 := g.IndPtr[n+1]
+	//if we can't find a index for a given index,
+	//it means the node does not exist or does not have neighbors
+	if p1 == EmptySentinel {
+		return nil
+	}
+	next := n + 1
+	//p2 represents the upper bound in the indice slice
+	p2 := g.IndPtr[next]
+	//p2 can't be linked to an EmptySentinel.
+	//it must me linked to an existing vertex in the graph
+	for {
+		if p2 != EmptySentinel {
+			break
+		}
+		next++
+		p2 = g.IndPtr[next]
+	}
 	leng := uint64(len(g.Indices))
 	if p1 > leng || p2 > leng {
 		return []uint32{}
@@ -229,19 +268,53 @@ func (g *GraphMatrix) SetIndex(r, c uint32) error {
 	if !g.inRange(r, c) {
 		return errors.New("index out of range")
 	}
-	rowStartIdx := g.IndPtr[r] // this is the pointer into the Indices for column c
-	rowEndIdx := g.IndPtr[r+1]
+	prev := r
+	rowStartIdx := g.IndPtr[prev] // this is the pointer into the Indices for column c
 
-	i, found := SearchSorted32(g.Indices, c, rowStartIdx, rowEndIdx)
+	for {
+		if rowStartIdx != EmptySentinel {
+			break
+		}
+		if prev > 0 {
+			prev--
+			rowStartIdx = g.IndPtr[prev]
+		} else {
+			rowStartIdx = 0
+			break
+		}
+	}
+
+	next := r + 1
+	rowEndIdx := g.IndPtr[next]
+	for {
+		if rowEndIdx != EmptySentinel {
+			break
+		}
+		next++
+		if next < g.Dim() {
+			rowEndIdx = g.IndPtr[next]
+		} else {
+			rowEndIdx = uint64(g.Dim() - 1)
+			break
+		}
+	}
+	fmt.Println("SetIndex", rowStartIdx, rowEndIdx)
+	j, found := SearchSorted32(g.Indices, c, rowStartIdx, rowEndIdx)
+
+	fmt.Println("SearchSorted32", c, j, found)
+
 	if found { // already set
 		return nil
 	}
 	g.Indices = append(g.Indices, 0)
-	copy(g.Indices[i+1:], g.Indices[i:])
-	g.Indices[i] = c
-
-	for i := int(r + 1); i < len(g.IndPtr); i++ {
-		g.IndPtr[i]++
+	copy(g.Indices[j+1:], g.Indices[j:])
+	g.Indices[j] = c
+	g.IndPtr[c] = uint64(j)
+	for i := int(next); i < len(g.IndPtr); i++ {
+		if g.IndPtr[i] != EmptySentinel {
+			g.IndPtr[i]++
+		}
 	}
+
 	return nil
 }

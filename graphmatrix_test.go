@@ -13,12 +13,16 @@ func TestGraphMatrix(t *testing.T) {
 	if x := z.Dim(); x != 6 {
 		t.Errorf("Dim(): got %d, want %d", x, 6)
 	}
-	if err := z.SetIndex(3, 3); err != nil {
+	if err := z.SetIndex(3, 4); err != nil {
 		t.Errorf("Error in SetIndex(3,3)")
 	}
+
 	if z.SetIndex(1, 2) != nil {
 		t.Errorf("Error in SetIndex(1,2)")
 	}
+	fmt.Println("Indices", z.Indices)
+	fmt.Println("IndPtr", z.IndPtr)
+	panic("")
 	if z.SetIndex(3, 1) != nil {
 		t.Errorf("Error in SetIndex(3,1)")
 	}
